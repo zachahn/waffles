@@ -5,12 +5,8 @@ use std::thread::{self, JoinHandle};
 
 use clap::Parser;
 
-#[derive(Parser)]
-#[command(arg_required_else_help = true)]
-struct Args {
-    /// Script file to run
-    file: Option<PathBuf>,
-
+#[derive(clap::Args)]
+struct ModeArgs {
     /// Read commands from stdin
     #[arg(long, conflicts_with = "file")]
     stdin: bool,
@@ -18,6 +14,16 @@ struct Args {
     /// Skip the first line of the script (for use in shebang lines)
     #[arg(long, requires = "file")]
     shebang: bool,
+}
+
+#[derive(Parser)]
+#[command(arg_required_else_help = true)]
+struct Args {
+    /// Script file to run
+    file: Option<PathBuf>,
+
+    #[command(flatten)]
+    mode: ModeArgs,
 }
 
 fn run_commands(tasks: Vec<String>) -> Vec<JoinHandle<Option<String>>> {
@@ -58,14 +64,14 @@ fn parse_tasks(lines: impl Iterator<Item = String>) -> Vec<String> {
 fn main() {
     let args = Args::parse();
 
-    let tasks = if args.stdin {
+    let tasks = if args.mode.stdin {
         let stdin = std::io::stdin();
         parse_tasks(stdin.lock().lines().map(|l| l.expect("failed to read stdin")))
     } else {
         let path = args.file.expect("a script file is required (or use --stdin)");
         let file = std::fs::File::open(&path).expect("failed to open script file");
         let mut lines = BufReader::new(file).lines().map(|l| l.expect("failed to read line"));
-        if args.shebang {
+        if args.mode.shebang {
             lines.next(); // skip shebang line
         }
         parse_tasks(lines)
