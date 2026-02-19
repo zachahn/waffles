@@ -1,30 +1,11 @@
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
-use std::thread;
+use std::thread::{self, JoinHandle};
 
-fn main() {
-    let stdin = std::io::stdin();
-    let tasks: Vec<(String, String)> = stdin
-        .lock()
-        .lines()
-        .enumerate()
-        .filter_map(|(i, line)| {
-            let line = line.expect("failed to read stdin");
-            let line = line.trim().to_string();
-            if line.is_empty() {
-                return None;
-            }
-            if let Some((name, cmd)) = line.split_once(':') {
-                Some((name.trim().to_string(), cmd.trim().to_string()))
-            } else {
-                Some(((i + 1).to_string(), line))
-            }
-        })
-        .collect();
-
-    let handles: Vec<_> = tasks
+fn run_commands(tasks: Vec<String>) -> Vec<JoinHandle<Option<String>>> {
+    tasks
         .into_iter()
-        .map(|(name, cmd)| {
+        .map(|cmd| {
             thread::spawn(move || {
                 let mut child = Command::new("sh")
                     .args(["-c", &cmd])
@@ -37,15 +18,37 @@ fn main() {
 
                 for line in reader.lines() {
                     let line = line.expect("failed to read line");
-                    println!("[{name}]: {line}");
+                    println!("[{cmd}]: {line}");
                 }
 
-                child.wait().expect("child process failed");
+                let status = child.wait().expect("child process failed");
+                if status.success() { None } else { Some(cmd) }
             })
+        })
+        .collect()
+}
+
+fn main() {
+    let stdin = std::io::stdin();
+    let tasks: Vec<String> = stdin
+        .lock()
+        .lines()
+        .filter_map(|line| {
+            let line = line.expect("failed to read stdin");
+            let line = line.trim().to_string();
+            if line.is_empty() { None } else { Some(line) }
         })
         .collect();
 
-    for handle in handles {
-        handle.join().expect("thread panicked");
+    let failed: Vec<String> = run_commands(tasks)
+        .into_iter()
+        .filter_map(|h| h.join().expect("thread panicked"))
+        .collect();
+
+    if !failed.is_empty() {
+        println!("\nfailed:");
+        for name in failed {
+            println!("  {name}");
+        }
     }
 }
