@@ -7,11 +7,11 @@ use clap::Parser;
 
 #[derive(clap::Args)]
 struct ModeArgs {
-    /// Read commands from stdin
+    /// Read commands from stdin instead of a file
     #[arg(long, conflicts_with = "file")]
     stdin: bool,
 
-    /// Skip the first line of the script (for use in shebang lines)
+    /// Run as a shebang interpreter (add to top of your script: #!/usr/bin/env waffle --shebang)
     #[arg(long, requires = "file")]
     shebang: bool,
 }
@@ -56,7 +56,11 @@ fn parse_tasks(lines: impl Iterator<Item = String>) -> Vec<String> {
     lines
         .filter_map(|line| {
             let line = line.trim().to_string();
-            if line.is_empty() || line.starts_with('#') { None } else { Some(line) }
+            if line.is_empty() || line.starts_with('#') {
+                None
+            } else {
+                Some(line)
+            }
         })
         .collect()
 }
@@ -66,14 +70,20 @@ fn main() {
 
     let tasks = if args.mode.stdin {
         let stdin = std::io::stdin();
-        parse_tasks(stdin.lock().lines().map(|l| l.expect("failed to read stdin")))
+        parse_tasks(
+            stdin
+                .lock()
+                .lines()
+                .map(|l| l.expect("failed to read stdin")),
+        )
     } else {
-        let path = args.file.expect("a script file is required (or use --stdin)");
+        let path = args
+            .file
+            .expect("a script file is required (or use --stdin)");
         let file = std::fs::File::open(&path).expect("failed to open script file");
-        let mut lines = BufReader::new(file).lines().map(|l| l.expect("failed to read line"));
-        if args.mode.shebang {
-            lines.next(); // skip shebang line
-        }
+        let lines = BufReader::new(file)
+            .lines()
+            .map(|l| l.expect("failed to read line"));
         parse_tasks(lines)
     };
 
