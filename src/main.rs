@@ -6,13 +6,18 @@ use std::thread::{self, JoinHandle};
 use clap::Parser;
 
 #[derive(Parser)]
+#[command(arg_required_else_help = true)]
 struct Args {
-    /// Run in shebang mode, reading commands from a script file
-    #[arg(long)]
-    shebang: bool,
-
-    /// Script file to run (used in shebang mode)
+    /// Script file to run
     file: Option<PathBuf>,
+
+    /// Read commands from stdin
+    #[arg(long, conflicts_with = "file")]
+    stdin: bool,
+
+    /// Skip the first line of the script (for use in shebang lines)
+    #[arg(long, requires = "file")]
+    shebang: bool,
 }
 
 fn run_commands(tasks: Vec<String>) -> Vec<JoinHandle<Option<String>>> {
@@ -53,15 +58,17 @@ fn parse_tasks(lines: impl Iterator<Item = String>) -> Vec<String> {
 fn main() {
     let args = Args::parse();
 
-    let tasks = if args.shebang {
-        let path = args.file.expect("shebang mode requires a file argument");
-        let file = std::fs::File::open(&path).expect("failed to open script file");
-        let mut lines = BufReader::new(file).lines().map(|l| l.expect("failed to read line"));
-        lines.next(); // skip shebang line
-        parse_tasks(lines)
-    } else {
+    let tasks = if args.stdin {
         let stdin = std::io::stdin();
         parse_tasks(stdin.lock().lines().map(|l| l.expect("failed to read stdin")))
+    } else {
+        let path = args.file.expect("a script file is required (or use --stdin)");
+        let file = std::fs::File::open(&path).expect("failed to open script file");
+        let mut lines = BufReader::new(file).lines().map(|l| l.expect("failed to read line"));
+        if args.shebang {
+            lines.next(); // skip shebang line
+        }
+        parse_tasks(lines)
     };
 
     let failed: Vec<String> = run_commands(tasks)
