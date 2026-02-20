@@ -32,6 +32,10 @@ struct Args {
     /// Argument to pass to the shell before the command; may be specified multiple times
     #[arg(long = "shell-arg", default_values = ["-c"])]
     shell_args: Vec<String>,
+
+    /// Do not print a summary of failed commands at the end
+    #[arg(long)]
+    skip_report_failures: bool,
 }
 
 fn run_commands(
@@ -107,10 +111,10 @@ fn main() {
         .filter_map(|h| h.join().expect("thread panicked"))
         .collect();
 
-    if !failed.is_empty() {
+    if !args.skip_report_failures && !failed.is_empty() {
         println!("\nfailed:");
-        for name in failed {
-            println!("  {name}");
+        for cmd in failed {
+            println!("  {cmd}");
         }
     }
 }
