@@ -102,8 +102,9 @@ fn run_commands(
         .collect()
 }
 
-fn parse_tasks(lines: impl Iterator<Item = String>) -> Vec<String> {
+fn parse_tasks(lines: Vec<String>) -> Vec<String> {
     lines
+        .into_iter()
         .filter_map(|line| {
             let line = line.trim().to_string();
             if line.is_empty() || line.starts_with('#') {
@@ -125,7 +126,7 @@ fn main() -> Result<()> {
             .lines()
             .map(|l| l.context("failed to read stdin"))
             .collect::<Result<Vec<String>>>()?;
-        parse_tasks(lines.into_iter())
+        parse_tasks(lines)
     } else {
         let path = args
             .file
@@ -135,7 +136,7 @@ fn main() -> Result<()> {
             .lines()
             .map(|l| l.context("failed to read line"))
             .collect::<Result<Vec<String>>>()?;
-        parse_tasks(lines.into_iter())
+        parse_tasks(lines)
     };
 
     let failed: Vec<String> = run_commands(tasks, args.shell, args.shell_args, args.label_width)
