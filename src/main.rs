@@ -7,25 +7,15 @@ use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use rayon::prelude::*;
 
-#[derive(clap::Args)]
-struct ModeArgs {
-    /// Read commands from stdin instead of a file
-    #[arg(long, conflicts_with = "file")]
-    stdin: bool,
-
-    /// Run as a shebang interpreter (add to top of your script: #!/usr/bin/env waffle --shebang)
-    #[arg(long, requires = "file")]
-    shebang: bool,
-}
-
 #[derive(Parser)]
 #[command(arg_required_else_help = true)]
 struct Args {
     /// Script file to run
     file: Option<PathBuf>,
 
-    #[command(flatten)]
-    mode: ModeArgs,
+    /// Read commands from stdin instead of a file
+    #[arg(long, conflicts_with = "file")]
+    stdin: bool,
 
     /// Shell to use for running commands
     #[arg(long, default_value = "/bin/sh")]
@@ -130,7 +120,7 @@ fn parse_tasks(lines: Vec<String>) -> Vec<String> {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    let tasks = if args.mode.stdin {
+    let tasks = if args.stdin {
         let stdin = std::io::stdin();
         let lines = stdin
             .lock()

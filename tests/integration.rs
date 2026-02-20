@@ -201,19 +201,14 @@ fn stdin_mode_comments_and_blanks_ignored() {
     assert!(out.contains("real"));
 }
 
-// ── shebang mode ─────────────────────────────────────────────────────────────
+// ── shebang ───────────────────────────────────────────────────────────────────
 
 #[test]
-fn shebang_mode_skips_first_line() {
-    // In shebang mode the first line (the shebang) is treated as a comment
-    // and should not be executed as a command.
-    let (out, _, code) = run_file(
-        "#!/usr/bin/env waffle --shebang\necho hello\n",
-        &["--shebang"],
-    );
+fn shebang_line_treated_as_comment() {
+    // The shebang line starts with '#' so parse_tasks filters it; it must not appear as a label
+    let (out, _, code) = run_file("#!/usr/bin/env waffle\necho hello\n", &[]);
     assert_eq!(code, 0, "stdout: {out}");
     assert!(out.contains("hello"), "expected 'hello' in: {out:?}");
-    // The shebang line starts with '#' so parse_tasks filters it; it must not appear as a label
     assert!(
         !out.contains("#!/usr/bin/env"),
         "shebang line should not run"
