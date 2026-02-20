@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread::{self, JoinHandle};
 
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 
 #[derive(clap::Args)]
@@ -42,30 +43,30 @@ fn run_commands(
     tasks: Vec<String>,
     shell: String,
     shell_args: Vec<String>,
-) -> Vec<JoinHandle<Option<String>>> {
+) -> Vec<JoinHandle<Result<Option<String>>>> {
     let max_len = tasks.iter().map(|t| t.len()).max().unwrap_or(0);
     tasks
         .into_iter()
         .map(|cmd| {
             let shell = shell.clone();
             let shell_args = shell_args.clone();
-            thread::spawn(move || {
+            thread::spawn(move || -> Result<Option<String>> {
                 let mut child = Command::new(&shell)
                     .args(shell_args.iter().chain([&cmd]))
                     .stdout(Stdio::piped())
                     .spawn()
-                    .expect("failed to spawn process");
+                    .context("failed to spawn process")?;
 
-                let stdout = child.stdout.take().expect("failed to capture stdout");
+                let stdout = child.stdout.take().context("failed to capture stdout")?;
                 let reader = BufReader::new(stdout);
 
                 for line in reader.lines() {
-                    let line = line.expect("failed to read line");
+                    let line = line.context("failed to read line")?;
                     println!("{cmd:<max_len$} | {line}");
                 }
 
-                let status = child.wait().expect("child process failed");
-                if status.success() { None } else { Some(cmd) }
+                let status = child.wait().context("child process failed")?;
+                Ok(if status.success() { None } else { Some(cmd) })
             })
         })
         .collect()
@@ -84,31 +85,35 @@ fn parse_tasks(lines: impl Iterator<Item = String>) -> Vec<String> {
         .collect()
 }
 
-fn main() {
+fn main() -> Result<()> {
     let args = Args::parse();
 
     let tasks = if args.mode.stdin {
         let stdin = std::io::stdin();
-        parse_tasks(
-            stdin
-                .lock()
-                .lines()
-                .map(|l| l.expect("failed to read stdin")),
-        )
+        let lines = stdin
+            .lock()
+            .lines()
+            .map(|l| l.context("failed to read stdin"))
+            .collect::<Result<Vec<String>>>()?;
+        parse_tasks(lines.into_iter())
     } else {
         let path = args
             .file
-            .expect("a script file is required (or use --stdin)");
-        let file = std::fs::File::open(&path).expect("failed to open script file");
+            .context("a script file is required (or use --stdin)")?;
+        let file = std::fs::File::open(&path).context("failed to open script file")?;
         let lines = BufReader::new(file)
             .lines()
-            .map(|l| l.expect("failed to read line"));
-        parse_tasks(lines)
+            .map(|l| l.context("failed to read line"))
+            .collect::<Result<Vec<String>>>()?;
+        parse_tasks(lines.into_iter())
     };
 
     let failed: Vec<String> = run_commands(tasks, args.shell, args.shell_args)
         .into_iter()
-        .filter_map(|h| h.join().expect("thread panicked"))
+        .map(|h| h.join().map_err(|_| anyhow!("thread panicked")).and_then(|r| r))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .collect();
 
     if !args.skip_report_failures && !failed.is_empty() {
@@ -117,4 +122,6 @@ fn main() {
             println!("  {cmd}");
         }
     }
+
+    Ok(())
 }
