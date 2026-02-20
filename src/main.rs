@@ -43,6 +43,15 @@ struct Args {
     label_width: usize,
 }
 
+fn make_label(cmd: &str, label_width: usize) -> String {
+    if cmd.chars().count() > label_width {
+        let truncated: String = cmd.chars().take(label_width - 3).collect();
+        format!("{}...", truncated)
+    } else {
+        cmd.to_string()
+    }
+}
+
 fn run_commands(
     tasks: Vec<String>,
     shell: String,
@@ -61,12 +70,7 @@ fn run_commands(
             let shell = shell.clone();
             let shell_args = shell_args.clone();
             thread::spawn(move || -> Result<Option<String>> {
-                let label = if cmd.chars().count() > label_width {
-                    let truncated: String = cmd.chars().take(label_width - 3).collect();
-                    format!("{}...", truncated)
-                } else {
-                    cmd.clone()
-                };
+                let label = make_label(&cmd, label_width);
 
                 let mut child = Command::new(&shell)
                     .args(shell_args.iter().chain([&cmd]))
@@ -164,4 +168,113 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strs(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    mod parse_tasks_tests {
+        use super::*;
+
+        #[test]
+        fn filters_empty_lines() {
+            assert_eq!(parse_tasks(strs(&["cmd1", "", "cmd2"])), strs(&["cmd1", "cmd2"]));
+        }
+
+        #[test]
+        fn filters_comment_lines() {
+            assert_eq!(
+                parse_tasks(strs(&["# comment", "cmd", "# another"])),
+                strs(&["cmd"])
+            );
+        }
+
+        #[test]
+        fn trims_whitespace() {
+            assert_eq!(
+                parse_tasks(strs(&["  cmd  ", "\tcmd2\t"])),
+                strs(&["cmd", "cmd2"])
+            );
+        }
+
+        #[test]
+        fn trims_then_filters_blank() {
+            assert_eq!(parse_tasks(strs(&["   ", "\t", "cmd"])), strs(&["cmd"]));
+        }
+
+        #[test]
+        fn trims_then_filters_indented_comment() {
+            assert_eq!(
+                parse_tasks(strs(&["  # indented comment", "cmd"])),
+                strs(&["cmd"])
+            );
+        }
+
+        #[test]
+        fn empty_input_returns_empty() {
+            assert!(parse_tasks(vec![]).is_empty());
+        }
+
+        #[test]
+        fn all_filtered_returns_empty() {
+            assert!(parse_tasks(strs(&["", "# comment", "   "])).is_empty());
+        }
+
+        #[test]
+        fn preserves_order() {
+            assert_eq!(parse_tasks(strs(&["a", "b", "c"])), strs(&["a", "b", "c"]));
+        }
+
+        #[test]
+        fn shebang_line_treated_as_comment() {
+            assert_eq!(
+                parse_tasks(strs(&["#!/usr/bin/env waffle --shebang", "cmd"])),
+                strs(&["cmd"])
+            );
+        }
+    }
+
+    mod make_label_tests {
+        use super::*;
+
+        #[test]
+        fn short_command_unchanged() {
+            assert_eq!(make_label("echo hello", 32), "echo hello");
+        }
+
+        #[test]
+        fn exact_width_unchanged() {
+            let cmd = "a".repeat(32);
+            assert_eq!(make_label(&cmd, 32), cmd);
+        }
+
+        #[test]
+        fn longer_than_width_truncated_with_ellipsis() {
+            let cmd = "a".repeat(40);
+            let result = make_label(&cmd, 32);
+            assert_eq!(result, format!("{}...", "a".repeat(29)));
+            assert_eq!(result.chars().count(), 32);
+        }
+
+        #[test]
+        fn truncated_label_has_correct_length() {
+            let result = make_label("this is a very long command that exceeds the limit", 20);
+            assert!(result.ends_with("..."));
+            assert_eq!(result.chars().count(), 20);
+        }
+
+        #[test]
+        fn unicode_chars_counted_correctly() {
+            // 6 emoji chars, limit 5 → take 2 + "..."
+            let cmd = "😀😀😀😀😀😀";
+            let result = make_label(cmd, 5);
+            assert_eq!(result, "😀😀...");
+            assert_eq!(result.chars().count(), 5);
+        }
+    }
 }
