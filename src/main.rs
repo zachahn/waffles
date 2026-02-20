@@ -34,7 +34,11 @@ struct Args {
     shell_args: Vec<String>,
 }
 
-fn run_commands(tasks: Vec<String>, shell: String, shell_args: Vec<String>) -> Vec<JoinHandle<Option<String>>> {
+fn run_commands(
+    tasks: Vec<String>,
+    shell: String,
+    shell_args: Vec<String>,
+) -> Vec<JoinHandle<Option<String>>> {
     tasks
         .into_iter()
         .map(|cmd| {
