@@ -24,15 +24,25 @@ struct Args {
 
     #[command(flatten)]
     mode: ModeArgs,
+
+    /// Shell to use for running commands
+    #[arg(long, default_value = "/bin/sh")]
+    shell: String,
+
+    /// Argument to pass to the shell before the command; may be specified multiple times
+    #[arg(long = "shell-arg", default_values = ["-c"])]
+    shell_args: Vec<String>,
 }
 
-fn run_commands(tasks: Vec<String>) -> Vec<JoinHandle<Option<String>>> {
+fn run_commands(tasks: Vec<String>, shell: String, shell_args: Vec<String>) -> Vec<JoinHandle<Option<String>>> {
     tasks
         .into_iter()
         .map(|cmd| {
+            let shell = shell.clone();
+            let shell_args = shell_args.clone();
             thread::spawn(move || {
-                let mut child = Command::new("sh")
-                    .args(["-c", &cmd])
+                let mut child = Command::new(&shell)
+                    .args(shell_args.iter().chain([&cmd]))
                     .stdout(Stdio::piped())
                     .spawn()
                     .expect("failed to spawn process");
@@ -87,7 +97,7 @@ fn main() {
         parse_tasks(lines)
     };
 
-    let failed: Vec<String> = run_commands(tasks)
+    let failed: Vec<String> = run_commands(tasks, args.shell, args.shell_args)
         .into_iter()
         .filter_map(|h| h.join().expect("thread panicked"))
         .collect();
