@@ -1,10 +1,11 @@
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::thread::{self, JoinHandle};
+use std::thread;
 
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
+use rayon::prelude::*;
 
 #[derive(clap::Args)]
 struct ModeArgs {
@@ -41,6 +42,10 @@ struct Args {
     /// Maximum width for the command label column; longer commands are truncated
     #[arg(long, default_value_t = 32)]
     label_width: usize,
+
+    /// Number of parallel jobs; defaults to 2x CPU thread count
+    #[arg(long, short = 'j')]
+    jobs: Option<usize>,
 }
 
 fn make_label(cmd: &str, label_width: usize) -> String {
@@ -57,19 +62,20 @@ fn run_commands(
     shell: String,
     shell_args: Vec<String>,
     label_width: usize,
-) -> Vec<JoinHandle<Result<Option<String>>>> {
+    pool: &rayon::ThreadPool,
+) -> Result<Vec<Option<String>>> {
     let max_len = tasks
         .iter()
         .map(|t| t.chars().count())
         .max()
         .unwrap_or(0)
         .min(label_width);
-    tasks
-        .into_iter()
-        .map(|cmd| {
-            let shell = shell.clone();
-            let shell_args = shell_args.clone();
-            thread::spawn(move || -> Result<Option<String>> {
+    pool.install(|| {
+        tasks
+            .into_par_iter()
+            .map(|cmd| -> Result<Option<String>> {
+                let shell = shell.clone();
+                let shell_args = shell_args.clone();
                 let label = make_label(&cmd, label_width);
 
                 let mut child = Command::new(&shell)
@@ -103,8 +109,8 @@ fn run_commands(
                 let status = child.wait().context("child process failed")?;
                 Ok(if status.success() { None } else { Some(cmd) })
             })
-        })
-        .collect()
+            .collect()
+    })
 }
 
 fn parse_tasks(lines: Vec<String>) -> Vec<String> {
@@ -144,17 +150,22 @@ fn main() -> Result<()> {
         parse_tasks(lines)
     };
 
-    let failed: Vec<String> = run_commands(tasks, args.shell, args.shell_args, args.label_width)
-        .into_iter()
-        .map(|h| {
-            h.join()
-                .map_err(|_| anyhow!("thread panicked"))
-                .and_then(|r| r)
-        })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect();
+    let jobs = args.jobs.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            * 2
+    });
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(jobs)
+        .build()
+        .context("failed to build thread pool")?;
+
+    let failed: Vec<String> =
+        run_commands(tasks, args.shell, args.shell_args, args.label_width, &pool)?
+            .into_iter()
+            .flatten()
+            .collect();
 
     if !args.skip_report_failures && !failed.is_empty() {
         println!("\nfailed:");
@@ -183,7 +194,10 @@ mod tests {
 
         #[test]
         fn filters_empty_lines() {
-            assert_eq!(parse_tasks(strs(&["cmd1", "", "cmd2"])), strs(&["cmd1", "cmd2"]));
+            assert_eq!(
+                parse_tasks(strs(&["cmd1", "", "cmd2"])),
+                strs(&["cmd1", "cmd2"])
+            );
         }
 
         #[test]
