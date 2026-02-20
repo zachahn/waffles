@@ -39,6 +39,7 @@ fn run_commands(
     shell: String,
     shell_args: Vec<String>,
 ) -> Vec<JoinHandle<Option<String>>> {
+    let max_len = tasks.iter().map(|t| t.len()).max().unwrap_or(0);
     tasks
         .into_iter()
         .map(|cmd| {
@@ -56,7 +57,7 @@ fn run_commands(
 
                 for line in reader.lines() {
                     let line = line.expect("failed to read line");
-                    println!("[{cmd}]: {line}");
+                    println!("{cmd:<max_len$} | {line}");
                 }
 
                 let status = child.wait().expect("child process failed");
