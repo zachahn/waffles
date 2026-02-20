@@ -54,16 +54,30 @@ fn run_commands(
                 let mut child = Command::new(&shell)
                     .args(shell_args.iter().chain([&cmd]))
                     .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
                     .spawn()
                     .context("failed to spawn process")?;
 
                 let stdout = child.stdout.take().context("failed to capture stdout")?;
-                let reader = BufReader::new(stdout);
+                let stderr = child.stderr.take().context("failed to capture stderr")?;
 
-                for line in reader.lines() {
-                    let line = line.context("failed to read line")?;
+                let cmd_err = cmd.clone();
+                let stderr_thread = thread::spawn(move || -> Result<()> {
+                    for line in BufReader::new(stderr).lines() {
+                        let line = line.context("failed to read stderr line")?;
+                        println!("{cmd_err:<max_len$} ! {line}");
+                    }
+                    Ok(())
+                });
+
+                for line in BufReader::new(stdout).lines() {
+                    let line = line.context("failed to read stdout line")?;
                     println!("{cmd:<max_len$} | {line}");
                 }
+
+                stderr_thread
+                    .join()
+                    .map_err(|_| anyhow!("stderr thread panicked"))??;
 
                 let status = child.wait().context("child process failed")?;
                 Ok(if status.success() { None } else { Some(cmd) })
@@ -110,7 +124,11 @@ fn main() -> Result<()> {
 
     let failed: Vec<String> = run_commands(tasks, args.shell, args.shell_args)
         .into_iter()
-        .map(|h| h.join().map_err(|_| anyhow!("thread panicked")).and_then(|r| r))
+        .map(|h| {
+            h.join()
+                .map_err(|_| anyhow!("thread panicked"))
+                .and_then(|r| r)
+        })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .flatten()
