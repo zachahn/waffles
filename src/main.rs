@@ -37,20 +37,36 @@ struct Args {
     /// Do not print a summary of failed commands at the end
     #[arg(long)]
     skip_report_failures: bool,
+
+    /// Maximum width for the command label column; longer commands are truncated
+    #[arg(long, default_value_t = 32)]
+    label_width: usize,
 }
 
 fn run_commands(
     tasks: Vec<String>,
     shell: String,
     shell_args: Vec<String>,
+    label_width: usize,
 ) -> Vec<JoinHandle<Result<Option<String>>>> {
-    let max_len = tasks.iter().map(|t| t.len()).max().unwrap_or(0);
+    let max_len = tasks
+        .iter()
+        .map(|t| t.len())
+        .max()
+        .unwrap_or(0)
+        .min(label_width);
     tasks
         .into_iter()
         .map(|cmd| {
             let shell = shell.clone();
             let shell_args = shell_args.clone();
             thread::spawn(move || -> Result<Option<String>> {
+                let label = if cmd.len() > label_width {
+                    format!("{}...", &cmd[..label_width - 3])
+                } else {
+                    cmd.clone()
+                };
+
                 let mut child = Command::new(&shell)
                     .args(shell_args.iter().chain([&cmd]))
                     .stdout(Stdio::piped())
@@ -61,18 +77,18 @@ fn run_commands(
                 let stdout = child.stdout.take().context("failed to capture stdout")?;
                 let stderr = child.stderr.take().context("failed to capture stderr")?;
 
-                let cmd_err = cmd.clone();
+                let label_err = label.clone();
                 let stderr_thread = thread::spawn(move || -> Result<()> {
                     for line in BufReader::new(stderr).lines() {
                         let line = line.context("failed to read stderr line")?;
-                        println!("{cmd_err:<max_len$} ! {line}");
+                        println!("{label_err:<max_len$} ! {line}");
                     }
                     Ok(())
                 });
 
                 for line in BufReader::new(stdout).lines() {
                     let line = line.context("failed to read stdout line")?;
-                    println!("{cmd:<max_len$} | {line}");
+                    println!("{label:<max_len$} | {line}");
                 }
 
                 stderr_thread
@@ -122,7 +138,7 @@ fn main() -> Result<()> {
         parse_tasks(lines.into_iter())
     };
 
-    let failed: Vec<String> = run_commands(tasks, args.shell, args.shell_args)
+    let failed: Vec<String> = run_commands(tasks, args.shell, args.shell_args, args.label_width)
         .into_iter()
         .map(|h| {
             h.join()
