@@ -118,9 +118,13 @@ fn main() -> Result<()> {
 
     if !args.skip_report_failures && !failed.is_empty() {
         println!("\nfailed:");
-        for cmd in failed {
+        for cmd in &failed {
             println!("  {cmd}");
         }
+    }
+
+    if !failed.is_empty() {
+        std::process::exit(failed.len() as i32);
     }
 
     Ok(())
