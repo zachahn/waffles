@@ -51,7 +51,7 @@ fn run_commands(
 ) -> Vec<JoinHandle<Result<Option<String>>>> {
     let max_len = tasks
         .iter()
-        .map(|t| t.len())
+        .map(|t| t.chars().count())
         .max()
         .unwrap_or(0)
         .min(label_width);
@@ -61,8 +61,9 @@ fn run_commands(
             let shell = shell.clone();
             let shell_args = shell_args.clone();
             thread::spawn(move || -> Result<Option<String>> {
-                let label = if cmd.len() > label_width {
-                    format!("{}...", &cmd[..label_width - 3])
+                let label = if cmd.chars().count() > label_width {
+                    let truncated: String = cmd.chars().take(label_width - 3).collect();
+                    format!("{}...", truncated)
                 } else {
                     cmd.clone()
                 };
@@ -159,7 +160,7 @@ fn main() -> Result<()> {
     }
 
     if !failed.is_empty() {
-        std::process::exit(failed.len() as i32);
+        std::process::exit(failed.len().min(20) as i32);
     }
 
     Ok(())
