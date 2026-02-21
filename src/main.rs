@@ -17,6 +17,10 @@ struct Args {
     #[arg(long, conflicts_with = "file")]
     stdin: bool,
 
+    /// Command to run; may be specified multiple times
+    #[arg(long = "command", short = 'c')]
+    commands: Vec<String>,
+
     /// Shell to use for running commands
     #[arg(long, default_value = "/bin/sh")]
     shell: String,
@@ -136,25 +140,28 @@ fn parse_tasks(lines: Vec<String>) -> Vec<String> {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    let tasks = if args.stdin {
+    let mut tasks = Vec::new();
+
+    if let Some(path) = args.file {
+        let file = std::fs::File::open(&path).context("failed to open script file")?;
+        let lines = BufReader::new(file)
+            .lines()
+            .map(|l| l.context("failed to read line"))
+            .collect::<Result<Vec<String>>>()?;
+        tasks.extend(parse_tasks(lines));
+    }
+
+    if args.stdin {
         let stdin = std::io::stdin();
         let lines = stdin
             .lock()
             .lines()
             .map(|l| l.context("failed to read stdin"))
             .collect::<Result<Vec<String>>>()?;
-        parse_tasks(lines)
-    } else {
-        let path = args
-            .file
-            .context("a script file is required (or use --stdin)")?;
-        let file = std::fs::File::open(&path).context("failed to open script file")?;
-        let lines = BufReader::new(file)
-            .lines()
-            .map(|l| l.context("failed to read line"))
-            .collect::<Result<Vec<String>>>()?;
-        parse_tasks(lines)
-    };
+        tasks.extend(parse_tasks(lines));
+    }
+
+    tasks.extend(args.commands);
 
     let jobs = args.jobs.unwrap_or_else(|| {
         std::thread::available_parallelism()
