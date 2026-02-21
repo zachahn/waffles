@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 fn waffle() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_waffle"))
+    Command::new(env!("CARGO_BIN_EXE_waffles"))
 }
 
 /// Temporary file that deletes itself on drop.
