@@ -39,6 +39,7 @@ struct Args {
 }
 
 fn make_label(cmd: &str, label_width: usize) -> String {
+    let label_width = label_width.max(10);
     if cmd.chars().count() > label_width {
         let truncated: String = cmd.chars().take(label_width - 3).collect();
         format!("{}...", truncated)
@@ -274,11 +275,20 @@ mod tests {
 
         #[test]
         fn unicode_chars_counted_correctly() {
-            // 6 emoji chars, limit 5 → take 2 + "..."
-            let cmd = "😀😀😀😀😀😀";
-            let result = make_label(cmd, 5);
-            assert_eq!(result, "😀😀...");
-            assert_eq!(result.chars().count(), 5);
+            // 15 emoji chars, limit 10 → take 7 + "..."
+            let cmd = "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀".repeat(15);
+            let result = make_label(&cmd, 10);
+            assert_eq!(result, "😀😀😀😀😀😀😀...");
+            assert_eq!(result.chars().count(), 10);
+        }
+
+        #[test]
+        fn small_width_coerced_to_10() {
+            for raw in [0usize, 1, 2, 3, 9] {
+                let result = make_label(&"aaaaaaaaaaaaaaaaaaaa", raw);
+                assert_eq!(result.chars().count(), 10);
+                assert!(result.ends_with("..."));
+            }
         }
     }
 }
