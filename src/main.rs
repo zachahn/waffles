@@ -48,6 +48,45 @@ fn make_label(cmd: &str, label_width: usize) -> String {
     }
 }
 
+fn run_command(
+    cmd: &str,
+    shell: &str,
+    shell_args: &[String],
+    label: &str,
+    max_len: usize,
+) -> Result<bool> {
+    let mut child = Command::new(shell)
+        .args(shell_args.iter().chain([&cmd.to_string()]))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn process")?;
+
+    let stdout = child.stdout.take().context("failed to capture stdout")?;
+    let stderr = child.stderr.take().context("failed to capture stderr")?;
+
+    let label_err = label.to_string();
+    let stderr_thread = thread::spawn(move || -> Result<()> {
+        for line in BufReader::new(stderr).lines() {
+            let line = line.context("failed to read stderr line")?;
+            println!("{label_err:<max_len$} ! {line}");
+        }
+        Ok(())
+    });
+
+    for line in BufReader::new(stdout).lines() {
+        let line = line.context("failed to read stdout line")?;
+        println!("{label:<max_len$} | {line}");
+    }
+
+    stderr_thread
+        .join()
+        .map_err(|_| anyhow!("stderr thread panicked"))??;
+
+    let status = child.wait().context("child process failed")?;
+    Ok(status.success())
+}
+
 fn run_commands(
     tasks: Vec<String>,
     shell: String,
@@ -61,44 +100,20 @@ fn run_commands(
         .max()
         .unwrap_or(0)
         .min(label_width);
+
     pool.install(|| {
         tasks
             .into_par_iter()
             .map(|cmd| -> Result<Option<String>> {
-                let shell = shell.clone();
-                let shell_args = shell_args.clone();
                 let label = make_label(&cmd, label_width);
-
-                let mut child = Command::new(&shell)
-                    .args(shell_args.iter().chain([&cmd]))
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .context("failed to spawn process")?;
-
-                let stdout = child.stdout.take().context("failed to capture stdout")?;
-                let stderr = child.stderr.take().context("failed to capture stderr")?;
-
-                let label_err = label.clone();
-                let stderr_thread = thread::spawn(move || -> Result<()> {
-                    for line in BufReader::new(stderr).lines() {
-                        let line = line.context("failed to read stderr line")?;
-                        println!("{label_err:<max_len$} ! {line}");
+                match run_command(&cmd, &shell, &shell_args, &label, max_len) {
+                    Ok(true) => Ok(None),
+                    Ok(false) => Ok(Some(cmd)),
+                    Err(e) => {
+                        println!("{label:<max_len$} ! {e:#}");
+                        Ok(Some(cmd))
                     }
-                    Ok(())
-                });
-
-                for line in BufReader::new(stdout).lines() {
-                    let line = line.context("failed to read stdout line")?;
-                    println!("{label:<max_len$} | {line}");
                 }
-
-                stderr_thread
-                    .join()
-                    .map_err(|_| anyhow!("stderr thread panicked"))??;
-
-                let status = child.wait().context("child process failed")?;
-                Ok(if status.success() { None } else { Some(cmd) })
             })
             .collect()
     })
