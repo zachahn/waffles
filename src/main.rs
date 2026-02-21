@@ -13,8 +13,8 @@ struct Args {
     /// Script file to run
     file: Option<PathBuf>,
 
-    /// Read commands from stdin instead of a file
-    #[arg(long, conflicts_with = "file")]
+    /// Read commands from stdin
+    #[arg(long)]
     stdin: bool,
 
     /// Command to run; may be specified multiple times
