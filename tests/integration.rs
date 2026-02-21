@@ -224,3 +224,16 @@ fn custom_shell_used() {
     assert_eq!(code, 0);
     assert!(out.contains("bash_ran"), "expected output in: {out:?}");
 }
+
+#[test]
+fn bad_shell_path_all_commands_fail() {
+    // /yolo/bin does not exist; every spawn should fail and be reported
+    let cmds = "echo 1 && exit 1\necho 2 && exit 2\necho 3 && exit 3\necho 4 && exit 4\n";
+    let (out, _, code) = run_stdin(cmds, &["--shell", "/fail"]);
+    // all 4 commands fail to spawn → exit code 4
+    assert_eq!(code, 4, "stdout: {out}");
+    // each failure should produce an error line with '!'
+    assert!(out.contains('!'), "expected error output in: {out:?}");
+    // failure summary should list commands
+    assert!(out.contains("failed:"), "expected 'failed:' in: {out:?}");
+}
