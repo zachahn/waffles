@@ -40,6 +40,10 @@ struct Args {
     /// Number of parallel jobs; defaults to 2x CPU thread count
     #[arg(long, short = 'j')]
     jobs: Option<usize>,
+
+    /// Suppress per-command output; only print output of failed commands
+    #[arg(long, short = 'q')]
+    quiet: bool,
 }
 
 fn make_label(cmd: &str, label_width: usize) -> String {
@@ -58,6 +62,7 @@ fn run_command(
     shell_args: &[String],
     label: &str,
     max_len: usize,
+    quiet: bool,
 ) -> Result<bool> {
     let mut child = Command::new(shell)
         .args(shell_args.iter().chain([&cmd.to_string()]))
@@ -70,24 +75,44 @@ fn run_command(
     let stderr = child.stderr.take().context("failed to capture stderr")?;
 
     let label_err = label.to_string();
-    let stderr_thread = thread::spawn(move || -> Result<()> {
+    let stderr_thread = thread::spawn(move || -> Result<Vec<String>> {
+        let mut buf = Vec::new();
         for line in BufReader::new(stderr).lines() {
             let line = line.context("failed to read stderr line")?;
-            println!("{label_err:<max_len$} ! {line}");
+            if quiet {
+                buf.push(line);
+            } else {
+                println!("{label_err:<max_len$} ! {line}");
+            }
         }
-        Ok(())
+        Ok(buf)
     });
 
+    let mut stdout_buf = Vec::new();
     for line in BufReader::new(stdout).lines() {
         let line = line.context("failed to read stdout line")?;
-        println!("{label:<max_len$} | {line}");
+        if quiet {
+            stdout_buf.push(line);
+        } else {
+            println!("{label:<max_len$} | {line}");
+        }
     }
 
-    stderr_thread
+    let stderr_buf = stderr_thread
         .join()
         .map_err(|_| anyhow!("stderr thread panicked"))??;
 
     let status = child.wait().context("child process failed")?;
+
+    if quiet && !status.success() {
+        for line in &stdout_buf {
+            println!("{label:<max_len$} | {line}");
+        }
+        for line in &stderr_buf {
+            println!("{label:<max_len$} ! {line}");
+        }
+    }
+
     Ok(status.success())
 }
 
@@ -96,6 +121,7 @@ fn run_commands(
     shell: String,
     shell_args: Vec<String>,
     label_width: usize,
+    quiet: bool,
     pool: &rayon::ThreadPool,
 ) -> Result<Vec<Option<String>>> {
     let max_len = tasks
@@ -110,7 +136,7 @@ fn run_commands(
             .into_par_iter()
             .map(|cmd| -> Result<Option<String>> {
                 let label = make_label(&cmd, label_width);
-                match run_command(&cmd, &shell, &shell_args, &label, max_len) {
+                match run_command(&cmd, &shell, &shell_args, &label, max_len, quiet) {
                     Ok(true) => Ok(None),
                     Ok(false) => Ok(Some(cmd)),
                     Err(e) => {
@@ -174,8 +200,12 @@ fn main() -> Result<()> {
         .build()
         .context("failed to build thread pool")?;
 
+    if args.quiet {
+        println!("running...");
+    }
+
     let failed: Vec<String> =
-        run_commands(tasks, args.shell, args.shell_args, args.label_width, &pool)?
+        run_commands(tasks, args.shell, args.shell_args, args.label_width, args.quiet, &pool)?
             .into_iter()
             .flatten()
             .collect();
@@ -185,6 +215,10 @@ fn main() -> Result<()> {
         for cmd in &failed {
             println!("  {cmd}");
         }
+    }
+
+    if failed.is_empty() && args.quiet {
+        println!("all commands succeeded");
     }
 
     if !failed.is_empty() {

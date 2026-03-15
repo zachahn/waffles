@@ -215,6 +215,65 @@ fn shebang_line_treated_as_comment() {
     );
 }
 
+// ── quiet mode ───────────────────────────────────────────────────────────────
+
+#[test]
+fn quiet_prints_running() {
+    let (out, _, _) = run_stdin("echo hello\n", &["--quiet"]);
+    assert!(out.starts_with("running..."), "expected 'running...' at start: {out:?}");
+}
+
+#[test]
+fn quiet_all_succeed_prints_success_message() {
+    let (out, _, code) = run_stdin("echo hello\necho world\n", &["--quiet"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("all commands succeeded"), "expected success msg: {out:?}");
+}
+
+#[test]
+fn quiet_all_succeed_suppresses_command_output() {
+    let (out, _, _) = run_stdin("echo hello\n", &["--quiet"]);
+    assert!(!out.contains("| hello"), "expected no command output: {out:?}");
+}
+
+#[test]
+fn quiet_failure_shows_failed_stdout() {
+    let (out, _, _) = run_stdin("echo badout && exit 1\n", &["--quiet"]);
+    assert!(out.contains("| badout"), "expected failed stdout: {out:?}");
+}
+
+#[test]
+fn quiet_failure_shows_failed_stderr() {
+    let (out, _, _) = run_stdin("echo errmsg >&2 && exit 1\n", &["--quiet"]);
+    assert!(out.contains("! errmsg"), "expected failed stderr: {out:?}");
+}
+
+#[test]
+fn quiet_failure_suppresses_successful_command_output() {
+    let (out, _, _) = run_stdin("echo good\necho bad && exit 1\n", &["--quiet"]);
+    assert!(!out.contains("| good"), "should not show successful cmd output: {out:?}");
+    assert!(out.contains("| bad"), "should show failed cmd output: {out:?}");
+}
+
+#[test]
+fn quiet_failure_shows_failed_section() {
+    let (out, _, _) = run_stdin("false\n", &["--quiet"]);
+    assert!(out.contains("failed:"), "expected 'failed:' in: {out:?}");
+}
+
+#[test]
+fn quiet_failure_no_success_message() {
+    let (out, _, _) = run_stdin("false\n", &["--quiet"]);
+    assert!(!out.contains("all commands succeeded"), "should not show success msg: {out:?}");
+}
+
+#[test]
+fn quiet_short_flag_works() {
+    let (out, _, code) = run_stdin("echo hi\n", &["-q"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("all commands succeeded"), "expected success msg: {out:?}");
+}
+
 // ── custom shell ─────────────────────────────────────────────────────────────
 
 #[test]
