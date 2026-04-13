@@ -44,6 +44,10 @@ struct Args {
     /// Suppress per-command output; only print output of failed commands
     #[arg(long, short = 'q')]
     quiet: bool,
+
+    /// Change working directory to the directory containing the script file before running commands
+    #[arg(long)]
+    chdir_script_dir: bool,
 }
 
 fn make_label(cmd: &str, label_width: usize) -> String {
@@ -63,13 +67,17 @@ fn run_command(
     label: &str,
     max_len: usize,
     quiet: bool,
+    cwd: Option<&std::path::Path>,
 ) -> Result<bool> {
-    let mut child = Command::new(shell)
+    let mut builder = Command::new(shell);
+    builder
         .args(shell_args.iter().chain([&cmd.to_string()]))
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("failed to spawn process")?;
+        .stderr(Stdio::piped());
+    if let Some(dir) = cwd {
+        builder.current_dir(dir);
+    }
+    let mut child = builder.spawn().context("failed to spawn process")?;
 
     let stdout = child.stdout.take().context("failed to capture stdout")?;
     let stderr = child.stderr.take().context("failed to capture stderr")?;
@@ -122,6 +130,7 @@ fn run_commands(
     shell_args: Vec<String>,
     label_width: usize,
     quiet: bool,
+    cwd: Option<&std::path::Path>,
     pool: &rayon::ThreadPool,
 ) -> Result<Vec<Option<String>>> {
     let max_len = tasks
@@ -136,7 +145,7 @@ fn run_commands(
             .into_par_iter()
             .map(|cmd| -> Result<Option<String>> {
                 let label = make_label(&cmd, label_width);
-                match run_command(&cmd, &shell, &shell_args, &label, max_len, quiet) {
+                match run_command(&cmd, &shell, &shell_args, &label, max_len, quiet, cwd) {
                     Ok(true) => Ok(None),
                     Ok(false) => Ok(Some(cmd)),
                     Err(e) => {
@@ -167,8 +176,22 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     let mut tasks = Vec::new();
+    let mut script_dir: Option<PathBuf> = None;
+
+    if args.chdir_script_dir && args.file.is_none() {
+        eprintln!("warning: --chdir-script-dir has no effect without a script file");
+    }
 
     if let Some(path) = args.file {
+        if args.chdir_script_dir {
+            script_dir = path
+                .canonicalize()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+            if script_dir.is_none() {
+                eprintln!("warning: --chdir-here could not resolve the script's directory");
+            }
+        }
         let file = std::fs::File::open(&path).context("failed to open script file")?;
         let lines = BufReader::new(file)
             .lines()
@@ -205,7 +228,7 @@ fn main() -> Result<()> {
     }
 
     let failed: Vec<String> =
-        run_commands(tasks, args.shell, args.shell_args, args.label_width, args.quiet, &pool)?
+        run_commands(tasks, args.shell, args.shell_args, args.label_width, args.quiet, script_dir.as_deref(), &pool)?
             .into_iter()
             .flatten()
             .collect();

@@ -274,6 +274,48 @@ fn quiet_short_flag_works() {
     assert!(out.contains("all commands succeeded"), "expected success msg: {out:?}");
 }
 
+// ── chdir-script-dir ─────────────────────────────────────────────────────────
+
+#[test]
+fn chdir_script_dir_sets_cwd_to_script_directory() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    let dir = std::env::temp_dir().join(format!("waffle_chdir_test_{ns}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let script_path = dir.join("tasks.sh");
+    std::fs::write(&script_path, "pwd\n").unwrap();
+
+    let out = waffle()
+        .arg(&script_path)
+        .arg("--chdir-script-dir")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run waffle");
+
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let expected = dir.canonicalize().unwrap_or(dir.clone());
+    assert!(
+        stdout.contains(expected.to_str().unwrap()),
+        "expected {:?} in output: {stdout:?}",
+        expected
+    );
+}
+
+#[test]
+fn chdir_script_dir_warning_when_no_file() {
+    let (_, stderr, _) = run_stdin("echo hi\n", &["--chdir-script-dir"]);
+    assert!(
+        stderr.contains("--chdir-script-dir"),
+        "expected warning in stderr: {stderr:?}"
+    );
+}
+
 // ── custom shell ─────────────────────────────────────────────────────────────
 
 #[test]
