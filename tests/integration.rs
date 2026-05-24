@@ -461,3 +461,57 @@ fn output_shared_file_quiet_success_no_file() {
     assert_eq!(code, 0);
     assert!(!log_path.exists(), "no file for quiet success");
 }
+
+#[test]
+fn output_order_placeholder_expands() {
+    let dir = TempDir::new("waffle_output_order");
+    let pattern = dir.path().join("{order}.log");
+    let (out, _, code) = run_stdin("echo aaa\necho bbb\n", &["-o", pattern.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let p1 = dir.path().join("1.log");
+    let p2 = dir.path().join("2.log");
+    assert!(p1.exists(), "expected 1.log to exist");
+    assert!(p2.exists(), "expected 2.log to exist");
+    let c1 = std::fs::read_to_string(&p1).unwrap();
+    let c2 = std::fs::read_to_string(&p2).unwrap();
+    assert!(c1.contains("aaa"), "expected first command in 1.log: {c1:?}");
+    assert!(c2.contains("bbb"), "expected second command in 2.log: {c2:?}");
+    assert!(out.contains("1.log"), "expected 1.log in output: {out:?}");
+    assert!(out.contains("2.log"), "expected 2.log in output: {out:?}");
+}
+
+#[test]
+fn output_order_zero_padded_with_ten_or_more_tasks() {
+    let dir = TempDir::new("waffle_output_order_pad");
+    let pattern = dir.path().join("{order}.log");
+    let cmds: Vec<String> = (1..=11).map(|i| format!("echo t{i}")).collect();
+    let input = cmds.join("\n") + "\n";
+    let (out, _, code) = run_stdin(&input, &["-o", pattern.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(dir.path().join("01.log").exists(), "expected 01.log (zero-padded)");
+    assert!(dir.path().join("09.log").exists(), "expected 09.log (zero-padded)");
+    assert!(dir.path().join("10.log").exists(), "expected 10.log");
+    assert!(dir.path().join("11.log").exists(), "expected 11.log");
+    assert!(!dir.path().join("1.log").exists(), "should not have unpadded 1.log");
+    assert!(out.contains("01.log"), "expected 01.log in output: {out:?}");
+}
+
+#[test]
+fn output_cmd_sanitizes_special_chars() {
+    let dir = TempDir::new("waffle_output_sanitize");
+    let pattern = dir.path().join("{cmd}.log");
+    let (out, _, code) = run_stdin("echo 'hello world'\n", &["-o", pattern.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(out.contains("echo_hello_world_.log"), "expected sanitized filename: {out:?}");
+}
+
+#[test]
+fn output_cmd_collapses_consecutive_underscores() {
+    let dir = TempDir::new("waffle_output_collapse");
+    let pattern = dir.path().join("{cmd}.log");
+    let (out, _, code) = run_stdin("echo  hello   world\n", &["-o", pattern.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let log_name = out.lines().find(|l| l.ends_with(".log")).expect("expected log path line");
+    let filename = std::path::Path::new(log_name.trim()).file_name().unwrap().to_str().unwrap();
+    assert_eq!(filename, "echo_hello_world.log");
+}

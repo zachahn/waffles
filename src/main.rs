@@ -46,7 +46,8 @@ struct Args {
     quiet: bool,
 
     /// Output destination for command logs. Use "-" for stdout (default).
-    /// A file path may contain {cmd} and {timestamp} placeholders.
+    /// A file path may contain {cmd}, {order}, and {timestamp} placeholders.
+    /// {order} is the 1-based position of the command in the input.
     /// With --quiet, only failed commands produce output.
     /// When output goes to a file, the path is printed to stdout.
     #[arg(long, short = 'o', default_value = "-")]
@@ -99,9 +100,40 @@ fn make_timestamp() -> String {
     format!("{y:04}{mo:02}{d:02}-{h:02}{m:02}{s:02}")
 }
 
-fn resolve_output_path(pattern: &str, label: &str) -> PathBuf {
-    let safe_label = label.replace('/', "_").replace(' ', "_");
-    PathBuf::from(pattern.replace("{cmd}", &safe_label))
+fn sanitize_for_filename(s: &str) -> String {
+    let raw: String = s
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let mut result = String::with_capacity(raw.len());
+    let mut prev_underscore = false;
+    for c in raw.chars() {
+        if c == '_' {
+            if !prev_underscore {
+                result.push('_');
+            }
+            prev_underscore = true;
+        } else {
+            result.push(c);
+            prev_underscore = false;
+        }
+    }
+    result
+}
+
+fn resolve_output_path(pattern: &str, label: &str, order: usize, order_width: usize) -> PathBuf {
+    let safe_label = sanitize_for_filename(label);
+    PathBuf::from(
+        pattern
+            .replace("{cmd}", &safe_label)
+            .replace("{order}", &format!("{order:0>order_width$}")),
+    )
 }
 
 fn open_append(path: &std::path::Path) -> Result<std::fs::File> {
@@ -218,10 +250,12 @@ fn run_commands(
         .unwrap_or(0)
         .min(label_width);
 
+    let order_width = tasks.len().to_string().len();
     let output_paths: Option<Vec<PathBuf>> = output_pattern.map(|pat| {
         tasks
             .iter()
-            .map(|cmd| resolve_output_path(pat, &make_label(cmd, label_width)))
+            .enumerate()
+            .map(|(i, cmd)| resolve_output_path(pat, &make_label(cmd, label_width), i + 1, order_width))
             .collect()
     });
 
@@ -330,10 +364,23 @@ fn main() -> Result<()> {
 
     if let Some(pat) = &output_pattern {
         let mut printed = std::collections::BTreeSet::new();
-        let written_cmds = if args.quiet { &failed } else { &all_tasks };
-        for cmd in written_cmds {
+        let written_cmds: Vec<_> = if args.quiet {
+            failed
+                .iter()
+                .filter_map(|cmd| {
+                    all_tasks
+                        .iter()
+                        .position(|t| t == cmd)
+                        .map(|i| (i + 1, cmd))
+                })
+                .collect()
+        } else {
+            all_tasks.iter().enumerate().map(|(i, cmd)| (i + 1, cmd)).collect()
+        };
+        let order_width = all_tasks.len().to_string().len();
+        for (order, cmd) in written_cmds {
             let label = make_label(cmd, args.label_width);
-            let path = resolve_output_path(pat, &label);
+            let path = resolve_output_path(pat, &label, order, order_width);
             if path.exists() {
                 printed.insert(path);
             }
@@ -478,6 +525,45 @@ mod tests {
                 assert_eq!(result.chars().count(), 10);
                 assert!(result.ends_with("..."));
             }
+        }
+    }
+
+    mod sanitize_for_filename_tests {
+        use super::*;
+
+        #[test]
+        fn alphanumeric_unchanged() {
+            assert_eq!(sanitize_for_filename("echo-hello_world"), "echo-hello_world");
+        }
+
+        #[test]
+        fn dots_replaced() {
+            assert_eq!(sanitize_for_filename("file.txt"), "file_txt");
+        }
+
+        #[test]
+        fn spaces_become_underscore() {
+            assert_eq!(sanitize_for_filename("echo hello"), "echo_hello");
+        }
+
+        #[test]
+        fn slashes_become_underscore() {
+            assert_eq!(sanitize_for_filename("ls /tmp/foo"), "ls_tmp_foo");
+        }
+
+        #[test]
+        fn consecutive_special_chars_collapsed() {
+            assert_eq!(sanitize_for_filename("a  /  b"), "a_b");
+        }
+
+        #[test]
+        fn pipes_and_semicolons() {
+            assert_eq!(sanitize_for_filename("cat foo | grep bar; wc"), "cat_foo_grep_bar_wc");
+        }
+
+        #[test]
+        fn quotes_and_parens() {
+            assert_eq!(sanitize_for_filename("echo 'hello' \"world\" (test)"), "echo_hello_world_test_");
         }
     }
 }
