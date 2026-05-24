@@ -447,10 +447,9 @@ fn output_shared_file_contains_all_failures() {
     let content = std::fs::read_to_string(&log_path).expect("shared log should exist");
     assert!(content.contains("aaa"), "expected first failure in log: {content:?}");
     assert!(content.contains("bbb"), "expected second failure in log: {content:?}");
-    // Path should be printed exactly once
     let path_str = log_path.to_str().unwrap();
     let path_count = out.lines().filter(|l| l.contains(path_str)).count();
-    assert_eq!(path_count, 1, "path should be printed once, got {path_count}: {out:?}");
+    assert_eq!(path_count, 2, "path should appear under each failed command, got {path_count}: {out:?}");
 }
 
 #[test]

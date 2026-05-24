@@ -362,38 +362,54 @@ fn main() -> Result<()> {
             .flatten()
             .collect();
 
-    if let Some(pat) = &output_pattern {
-        let mut printed = std::collections::BTreeSet::new();
-        let written_cmds: Vec<_> = if args.quiet {
-            failed
-                .iter()
-                .filter_map(|cmd| {
-                    all_tasks
-                        .iter()
-                        .position(|t| t == cmd)
-                        .map(|i| (i + 1, cmd))
-                })
-                .collect()
-        } else {
-            all_tasks.iter().enumerate().map(|(i, cmd)| (i + 1, cmd)).collect()
-        };
-        let order_width = all_tasks.len().to_string().len();
-        for (order, cmd) in written_cmds {
+    let resolve_log = |cmd: &str| -> Option<PathBuf> {
+        output_pattern.as_ref().and_then(|pat| {
+            let order = all_tasks.iter().position(|t| t == cmd).map(|i| i + 1)?;
+            let order_width = all_tasks.len().to_string().len();
             let label = make_label(cmd, args.label_width);
             let path = resolve_output_path(pat, &label, order, order_width);
-            if path.exists() {
-                printed.insert(path);
+            path.exists().then_some(path)
+        })
+    };
+
+    if let Some(ref pat) = output_pattern {
+        if !args.quiet {
+            let order_width = all_tasks.len().to_string().len();
+            let mut printed = std::collections::BTreeSet::new();
+            for (i, cmd) in all_tasks.iter().enumerate() {
+                if failed.contains(cmd) {
+                    continue;
+                }
+                let label = make_label(cmd, args.label_width);
+                let path = resolve_output_path(pat, &label, i + 1, order_width);
+                if path.exists() {
+                    printed.insert(path);
+                }
             }
-        }
-        for path in &printed {
-            println!("{}", path.display());
+            for path in &printed {
+                println!("{}", path.display());
+            }
         }
     }
 
     if !args.skip_report_failures && !failed.is_empty() {
         println!("\nfailed:");
+        for (i, cmd) in failed.iter().enumerate() {
+            if i > 0 {
+                println!();
+            }
+            if let Some(path) = resolve_log(cmd) {
+                println!("  command: {cmd}");
+                println!("  log:     {}", path.display());
+            } else {
+                println!("  command: {cmd}");
+            }
+        }
+    } else if output_pattern.is_some() {
         for cmd in &failed {
-            println!("  {cmd}");
+            if let Some(path) = resolve_log(cmd) {
+                println!("{}", path.display());
+            }
         }
     }
 
