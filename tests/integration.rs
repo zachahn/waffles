@@ -338,3 +338,126 @@ fn bad_shell_path_all_commands_fail() {
     // failure summary should list commands
     assert!(out.contains("failed:"), "expected 'failed:' in: {out:?}");
 }
+
+// ── output option ────────────────────────────────────────────────────────────
+
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new(prefix: &str) -> Self {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        let tid = std::thread::current().id();
+        let path = std::env::temp_dir().join(format!("{prefix}_{ns}_{tid:?}"));
+        std::fs::create_dir_all(&path).unwrap();
+        TempDir(path)
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn output_dash_is_default_stdout() {
+    let (out, _, code) = run_stdin("echo hello\n", &["-o", "-"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("| hello"), "expected stdout output: {out:?}");
+}
+
+#[test]
+fn output_file_writes_log() {
+    let dir = TempDir::new("waffle_output_test");
+    let log_path = dir.path().join("test.log");
+    let (out, _, code) = run_stdin("echo fromlog\n", &["-o", log_path.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(out.contains(log_path.to_str().unwrap()), "expected path printed: {out:?}");
+    let content = std::fs::read_to_string(&log_path).expect("log file should exist");
+    assert!(content.contains("| fromlog"), "expected log content: {content:?}");
+}
+
+#[test]
+fn output_file_contains_stderr() {
+    let dir = TempDir::new("waffle_output_stderr");
+    let log_path = dir.path().join("err.log");
+    let (_, _, code) = run_stdin("echo errline >&2\n", &["-o", log_path.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let content = std::fs::read_to_string(&log_path).expect("log file should exist");
+    assert!(content.contains("! errline"), "expected stderr in log: {content:?}");
+}
+
+#[test]
+fn output_file_not_written_for_quiet_success() {
+    let dir = TempDir::new("waffle_output_quiet_ok");
+    let log_path = dir.path().join("quiet_ok.log");
+    let (_, _, code) = run_stdin("echo hi\n", &["-q", "-o", log_path.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(!log_path.exists(), "log should not exist for quiet success");
+}
+
+#[test]
+fn output_file_written_for_quiet_failure() {
+    let dir = TempDir::new("waffle_output_quiet_fail");
+    let log_path = dir.path().join("quiet_fail.log");
+    let (out, _, code) = run_stdin("echo failing && exit 1\n", &["-q", "-o", log_path.to_str().unwrap()]);
+    assert_ne!(code, 0);
+    assert!(out.contains(log_path.to_str().unwrap()), "expected path printed: {out:?}");
+    let content = std::fs::read_to_string(&log_path).expect("log file should exist");
+    assert!(content.contains("| failing"), "expected failure output in log: {content:?}");
+}
+
+#[test]
+fn output_cmd_placeholder_expands() {
+    let dir = TempDir::new("waffle_output_cmd");
+    let pattern = dir.path().join("{cmd}.log");
+    let (out, _, code) = run_stdin("echo hi\n", &["-o", pattern.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(out.contains("echo_hi.log"), "expected expanded filename: {out:?}");
+}
+
+#[test]
+fn output_timestamp_placeholder_expands() {
+    let dir = TempDir::new("waffle_output_ts");
+    let pattern = dir.path().join("{timestamp}.log");
+    let (out, _, code) = run_stdin("echo hi\n", &["-o", pattern.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(!out.contains("{timestamp}"), "timestamp should be expanded: {out:?}");
+    let path_line = out.lines().find(|l| l.ends_with(".log")).expect("expected log path line");
+    assert!(std::path::Path::new(path_line.trim()).exists(), "expanded log file should exist");
+}
+
+#[test]
+fn output_shared_file_contains_all_failures() {
+    let dir = TempDir::new("waffle_output_shared");
+    let log_path = dir.path().join("shared.log");
+    let (out, _, code) = run_stdin(
+        "echo aaa && exit 1\necho bbb && exit 1\n",
+        &["-q", "-o", log_path.to_str().unwrap()],
+    );
+    assert_ne!(code, 0);
+    let content = std::fs::read_to_string(&log_path).expect("shared log should exist");
+    assert!(content.contains("aaa"), "expected first failure in log: {content:?}");
+    assert!(content.contains("bbb"), "expected second failure in log: {content:?}");
+    // Path should be printed exactly once
+    let path_str = log_path.to_str().unwrap();
+    let path_count = out.lines().filter(|l| l.contains(path_str)).count();
+    assert_eq!(path_count, 1, "path should be printed once, got {path_count}: {out:?}");
+}
+
+#[test]
+fn output_shared_file_quiet_success_no_file() {
+    let dir = TempDir::new("waffle_output_shared_ok");
+    let log_path = dir.path().join("shared_ok.log");
+    let (_, _, code) = run_stdin("echo ok1\necho ok2\n", &["-q", "-o", log_path.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(!log_path.exists(), "no file for quiet success");
+}
