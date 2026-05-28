@@ -504,6 +504,71 @@ fn output_cmd_sanitizes_special_chars() {
     assert!(out.contains("echo_hello_world_.log"), "expected sanitized filename: {out:?}");
 }
 
+// ── named tasks ────────────────────────────────────────────────────────────
+
+#[test]
+fn named_label_is_the_name() {
+    let (out, _, code) = run_stdin("greet: echo hello\n", &["--named"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("greet | hello"), "expected name as label: {out:?}");
+    assert!(!out.contains("echo hello |"), "command should not be the label: {out:?}");
+}
+
+#[test]
+fn named_failure_report_shows_name_and_command() {
+    let (out, _, code) = run_stdin("broken: false\n", &["--named"]);
+    assert_eq!(code, 1);
+    assert!(out.contains("name:    broken"), "expected name in report: {out:?}");
+    assert!(out.contains("command: false"), "expected command in report: {out:?}");
+}
+
+#[test]
+fn named_missing_prefix_errors() {
+    let (_, stderr, code) = run_stdin("echo hi\n", &["--named"]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("name prefix"), "expected error in stderr: {stderr:?}");
+}
+
+#[test]
+fn named_uppercase_name_errors() {
+    let (_, stderr, code) = run_stdin("Build: echo hi\n", &["--named"]);
+    assert_ne!(code, 0);
+    assert!(stderr.to_lowercase().contains("name"), "expected name error: {stderr:?}");
+}
+
+#[test]
+fn named_empty_command_errors() {
+    let (_, stderr, code) = run_stdin("build:\n", &["--named"]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("empty command"), "expected empty command error: {stderr:?}");
+}
+
+#[test]
+fn named_duplicate_name_errors() {
+    let (_, stderr, code) = run_stdin("a: echo 1\na: echo 2\n", &["--named"]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("duplicate"), "expected duplicate error: {stderr:?}");
+}
+
+#[test]
+fn named_cmd_placeholder_uses_name() {
+    let dir = TempDir::new("waffle_named_cmd");
+    let pattern = dir.path().join("{cmd}.log");
+    let (out, _, code) = run_stdin("mytask: echo hi\n", &["--named", "-o", pattern.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(out.contains("mytask.log"), "expected name in filename: {out:?}");
+    let content = std::fs::read_to_string(dir.path().join("mytask.log")).expect("log should exist");
+    assert!(content.contains("mytask | hi"), "expected name label in log: {content:?}");
+}
+
+#[test]
+fn without_named_flag_colon_lines_are_literal() {
+    // No --named: the colon line is run verbatim as a command.
+    let (out, _, code) = run_stdin("echo build: ok\n", &[]);
+    assert_eq!(code, 0);
+    assert!(out.contains("build: ok"), "expected literal command output: {out:?}");
+}
+
 #[test]
 fn output_cmd_collapses_consecutive_underscores() {
     let dir = TempDir::new("waffle_output_collapse");

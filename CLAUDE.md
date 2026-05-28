@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `waffles` is a Rust CLI tool that runs shell commands in parallel, displaying their output with labeled prefixes. Commands can be provided via a script file, stdin (`--stdin`), or repeated `-c` flags. It uses rayon for parallel execution. Exit code equals the number of failed commands (capped at 20).
 
+With `--named`, each line from a script file or `--stdin` must be a named task of the form `name: command`, where `name` matches `[a-z0-9_-]+`. The name is used as the output label (and `{cmd}` filename placeholder) instead of the command text. Malformed lines, empty commands, and duplicate names are rejected up front. The flag does not affect `-c`/`--command` commands.
+
 ## Build & Test
 
 Standard Rust/Cargo workflow.

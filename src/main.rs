@@ -56,6 +56,35 @@ struct Args {
     /// Change working directory to the directory containing the script file before running commands
     #[arg(long)]
     chdir_script_dir: bool,
+
+    /// Treat each command line (from a script file or --stdin) as a named task of
+    /// the form `name: command`, where name matches [a-z0-9_-]+. The name is used
+    /// as the output label. Malformed lines, empty commands, and duplicate names
+    /// are rejected. Has no effect on -c/--command commands.
+    #[arg(long)]
+    named: bool,
+}
+
+/// A unit of work: an optional name and the command to run.
+/// When `name` is set, it is used as the label instead of the command text.
+#[derive(Clone, Debug, PartialEq)]
+struct Task {
+    name: Option<String>,
+    command: String,
+}
+
+impl Task {
+    fn unnamed(command: impl Into<String>) -> Self {
+        Task {
+            name: None,
+            command: command.into(),
+        }
+    }
+
+    /// The text used for the label column and the {cmd} filename placeholder.
+    fn label_source(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.command)
+    }
 }
 
 fn make_label(cmd: &str, label_width: usize) -> String {
@@ -234,7 +263,7 @@ fn run_command(
 }
 
 fn run_commands(
-    tasks: Vec<String>,
+    tasks: Vec<Task>,
     shell: String,
     shell_args: Vec<String>,
     label_width: usize,
@@ -242,10 +271,10 @@ fn run_commands(
     output_pattern: Option<&str>,
     cwd: Option<&std::path::Path>,
     pool: &rayon::ThreadPool,
-) -> Result<Vec<Option<String>>> {
+) -> Result<Vec<Option<Task>>> {
     let max_len = tasks
         .iter()
-        .map(|t| t.chars().count())
+        .map(|t| make_label(t.label_source(), label_width).chars().count())
         .max()
         .unwrap_or(0)
         .min(label_width);
@@ -255,7 +284,9 @@ fn run_commands(
         tasks
             .iter()
             .enumerate()
-            .map(|(i, cmd)| resolve_output_path(pat, &make_label(cmd, label_width), i + 1, order_width))
+            .map(|(i, task)| {
+                resolve_output_path(pat, &make_label(task.label_source(), label_width), i + 1, order_width)
+            })
             .collect()
     });
 
@@ -263,15 +294,15 @@ fn run_commands(
         tasks
             .into_par_iter()
             .enumerate()
-            .map(|(i, cmd)| -> Result<Option<String>> {
-                let label = make_label(&cmd, label_width);
+            .map(|(i, task)| -> Result<Option<Task>> {
+                let label = make_label(task.label_source(), label_width);
                 let path = output_paths.as_ref().map(|paths| paths[i].as_path());
-                match run_command(&cmd, &shell, &shell_args, &label, max_len, quiet, path, cwd) {
+                match run_command(&task.command, &shell, &shell_args, &label, max_len, quiet, path, cwd) {
                     Ok(true) => Ok(None),
-                    Ok(false) => Ok(Some(cmd)),
+                    Ok(false) => Ok(Some(task)),
                     Err(e) => {
                         println!("{label:<max_len$} ! {e:#}");
-                        Ok(Some(cmd))
+                        Ok(Some(task))
                     }
                 }
             })
@@ -279,7 +310,33 @@ fn run_commands(
     })
 }
 
-fn parse_tasks(lines: Vec<String>) -> Vec<String> {
+/// Parse a name from `/[a-z0-9_-]+/` followed by a colon at the start of a line.
+/// Returns the name and the remaining command (whitespace-trimmed), or an error
+/// if the line has no valid name prefix or an empty command.
+fn parse_named_line(line: &str) -> Result<(String, String)> {
+    let colon = line
+        .find(':')
+        .ok_or_else(|| anyhow!("missing name prefix (expected `name: command`): {line}"))?;
+    let name = &line[..colon];
+    if name.is_empty() {
+        return Err(anyhow!("empty task name in line: {line}"));
+    }
+    if let Some(bad) = name
+        .chars()
+        .find(|c| !(c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '-' || *c == '_'))
+    {
+        return Err(anyhow!(
+            "invalid character {bad:?} in task name {name:?}; names must match [a-z0-9_-]"
+        ));
+    }
+    let command = line[colon + 1..].trim();
+    if command.is_empty() {
+        return Err(anyhow!("task {name:?} has an empty command"));
+    }
+    Ok((name.to_string(), command.to_string()))
+}
+
+fn parse_tasks(lines: Vec<String>, named: bool) -> Result<Vec<Task>> {
     lines
         .into_iter()
         .filter_map(|line| {
@@ -288,6 +345,17 @@ fn parse_tasks(lines: Vec<String>) -> Vec<String> {
                 None
             } else {
                 Some(line)
+            }
+        })
+        .map(|line| {
+            if named {
+                let (name, command) = parse_named_line(&line)?;
+                Ok(Task {
+                    name: Some(name),
+                    command,
+                })
+            } else {
+                Ok(Task::unnamed(line))
             }
         })
         .collect()
@@ -318,7 +386,7 @@ fn main() -> Result<()> {
             .lines()
             .map(|l| l.context("failed to read line"))
             .collect::<Result<Vec<String>>>()?;
-        tasks.extend(parse_tasks(lines));
+        tasks.extend(parse_tasks(lines, args.named)?);
     }
 
     if args.stdin {
@@ -328,10 +396,21 @@ fn main() -> Result<()> {
             .lines()
             .map(|l| l.context("failed to read stdin"))
             .collect::<Result<Vec<String>>>()?;
-        tasks.extend(parse_tasks(lines));
+        tasks.extend(parse_tasks(lines, args.named)?);
     }
 
-    tasks.extend(args.commands);
+    tasks.extend(args.commands.into_iter().map(Task::unnamed));
+
+    if args.named {
+        let mut seen = std::collections::HashSet::new();
+        for task in &tasks {
+            if let Some(name) = &task.name
+                && !seen.insert(name.clone())
+            {
+                return Err(anyhow!("duplicate task name: {name:?}"));
+            }
+        }
+    }
 
     let jobs = args.jobs.unwrap_or_else(|| {
         std::thread::available_parallelism()
@@ -356,17 +435,17 @@ fn main() -> Result<()> {
 
     let all_tasks = tasks.clone();
 
-    let failed: Vec<String> =
+    let failed: Vec<Task> =
         run_commands(tasks, args.shell, args.shell_args, args.label_width, args.quiet, output_pattern.as_deref(), script_dir.as_deref(), &pool)?
             .into_iter()
             .flatten()
             .collect();
 
-    let resolve_log = |cmd: &str| -> Option<PathBuf> {
+    let resolve_log = |task: &Task| -> Option<PathBuf> {
         output_pattern.as_ref().and_then(|pat| {
-            let order = all_tasks.iter().position(|t| t == cmd).map(|i| i + 1)?;
+            let order = all_tasks.iter().position(|t| t == task).map(|i| i + 1)?;
             let order_width = all_tasks.len().to_string().len();
-            let label = make_label(cmd, args.label_width);
+            let label = make_label(task.label_source(), args.label_width);
             let path = resolve_output_path(pat, &label, order, order_width);
             path.exists().then_some(path)
         })
@@ -376,11 +455,11 @@ fn main() -> Result<()> {
         if !args.quiet {
             let order_width = all_tasks.len().to_string().len();
             let mut printed = std::collections::BTreeSet::new();
-            for (i, cmd) in all_tasks.iter().enumerate() {
-                if failed.contains(cmd) {
+            for (i, task) in all_tasks.iter().enumerate() {
+                if failed.contains(task) {
                     continue;
                 }
-                let label = make_label(cmd, args.label_width);
+                let label = make_label(task.label_source(), args.label_width);
                 let path = resolve_output_path(pat, &label, i + 1, order_width);
                 if path.exists() {
                     printed.insert(path);
@@ -394,20 +473,21 @@ fn main() -> Result<()> {
 
     if !args.skip_report_failures && !failed.is_empty() {
         println!("\nfailed:");
-        for (i, cmd) in failed.iter().enumerate() {
+        for (i, task) in failed.iter().enumerate() {
             if i > 0 {
                 println!();
             }
-            if let Some(path) = resolve_log(cmd) {
-                println!("  command: {cmd}");
+            if let Some(name) = &task.name {
+                println!("  name:    {name}");
+            }
+            println!("  command: {}", task.command);
+            if let Some(path) = resolve_log(task) {
                 println!("  log:     {}", path.display());
-            } else {
-                println!("  command: {cmd}");
             }
         }
     } else if output_pattern.is_some() {
-        for cmd in &failed {
-            if let Some(path) = resolve_log(cmd) {
+        for task in &failed {
+            if let Some(path) = resolve_log(task) {
                 println!("{}", path.display());
             }
         }
@@ -435,64 +515,131 @@ mod tests {
     mod parse_tasks_tests {
         use super::*;
 
+        /// The commands of an unnamed parse, for comparison against `strs(...)`.
+        fn cmds(lines: &[&str]) -> Vec<String> {
+            parse_tasks(strs(lines), false)
+                .unwrap()
+                .into_iter()
+                .map(|t| {
+                    assert_eq!(t.name, None);
+                    t.command
+                })
+                .collect()
+        }
+
         #[test]
         fn filters_empty_lines() {
-            assert_eq!(
-                parse_tasks(strs(&["cmd1", "", "cmd2"])),
-                strs(&["cmd1", "cmd2"])
-            );
+            assert_eq!(cmds(&["cmd1", "", "cmd2"]), strs(&["cmd1", "cmd2"]));
         }
 
         #[test]
         fn filters_comment_lines() {
-            assert_eq!(
-                parse_tasks(strs(&["# comment", "cmd", "# another"])),
-                strs(&["cmd"])
-            );
+            assert_eq!(cmds(&["# comment", "cmd", "# another"]), strs(&["cmd"]));
         }
 
         #[test]
         fn trims_whitespace() {
-            assert_eq!(
-                parse_tasks(strs(&["  cmd  ", "\tcmd2\t"])),
-                strs(&["cmd", "cmd2"])
-            );
+            assert_eq!(cmds(&["  cmd  ", "\tcmd2\t"]), strs(&["cmd", "cmd2"]));
         }
 
         #[test]
         fn trims_then_filters_blank() {
-            assert_eq!(parse_tasks(strs(&["   ", "\t", "cmd"])), strs(&["cmd"]));
+            assert_eq!(cmds(&["   ", "\t", "cmd"]), strs(&["cmd"]));
         }
 
         #[test]
         fn trims_then_filters_indented_comment() {
-            assert_eq!(
-                parse_tasks(strs(&["  # indented comment", "cmd"])),
-                strs(&["cmd"])
-            );
+            assert_eq!(cmds(&["  # indented comment", "cmd"]), strs(&["cmd"]));
         }
 
         #[test]
         fn empty_input_returns_empty() {
-            assert!(parse_tasks(vec![]).is_empty());
+            assert!(parse_tasks(vec![], false).unwrap().is_empty());
         }
 
         #[test]
         fn all_filtered_returns_empty() {
-            assert!(parse_tasks(strs(&["", "# comment", "   "])).is_empty());
+            assert!(cmds(&["", "# comment", "   "]).is_empty());
         }
 
         #[test]
         fn preserves_order() {
-            assert_eq!(parse_tasks(strs(&["a", "b", "c"])), strs(&["a", "b", "c"]));
+            assert_eq!(cmds(&["a", "b", "c"]), strs(&["a", "b", "c"]));
         }
 
         #[test]
         fn shebang_line_treated_as_comment() {
-            assert_eq!(
-                parse_tasks(strs(&["#!/usr/bin/env waffle --shebang", "cmd"])),
-                strs(&["cmd"])
-            );
+            assert_eq!(cmds(&["#!/usr/bin/env waffle --shebang", "cmd"]), strs(&["cmd"]));
+        }
+
+        #[test]
+        fn unnamed_mode_keeps_colon_lines_literal() {
+            assert_eq!(cmds(&["build: make all"]), strs(&["build: make all"]));
+        }
+    }
+
+    mod named_tasks_tests {
+        use super::*;
+
+        fn parse(lines: &[&str]) -> Result<Vec<Task>> {
+            parse_tasks(strs(lines), true)
+        }
+
+        #[test]
+        fn splits_name_and_command() {
+            let tasks = parse(&["build: make all"]).unwrap();
+            assert_eq!(tasks, vec![Task { name: Some("build".into()), command: "make all".into() }]);
+        }
+
+        #[test]
+        fn name_allows_digits_dashes_underscores() {
+            let tasks = parse(&["a-b_2: echo hi"]).unwrap();
+            assert_eq!(tasks[0].name.as_deref(), Some("a-b_2"));
+            assert_eq!(tasks[0].command, "echo hi");
+        }
+
+        #[test]
+        fn command_is_trimmed() {
+            let tasks = parse(&["t:    echo hi   "]).unwrap();
+            assert_eq!(tasks[0].command, "echo hi");
+        }
+
+        #[test]
+        fn only_first_colon_splits() {
+            let tasks = parse(&["t: echo a:b"]).unwrap();
+            assert_eq!(tasks[0].command, "echo a:b");
+        }
+
+        #[test]
+        fn comments_and_blanks_still_filtered() {
+            let tasks = parse(&["# comment", "", "t: echo hi"]).unwrap();
+            assert_eq!(tasks.len(), 1);
+        }
+
+        #[test]
+        fn missing_colon_errors() {
+            assert!(parse(&["echo hi"]).is_err());
+        }
+
+        #[test]
+        fn empty_name_errors() {
+            assert!(parse(&[": echo hi"]).is_err());
+        }
+
+        #[test]
+        fn uppercase_name_errors() {
+            assert!(parse(&["Build: make"]).is_err());
+        }
+
+        #[test]
+        fn space_in_name_errors() {
+            assert!(parse(&["git log: foo"]).is_err());
+        }
+
+        #[test]
+        fn empty_command_errors() {
+            assert!(parse(&["build:"]).is_err());
+            assert!(parse(&["build:   "]).is_err());
         }
     }
 
