@@ -46,7 +46,7 @@ struct Args {
     quiet: bool,
 
     /// Output destination for command logs. Use "-" for stdout (default).
-    /// A file path may contain {cmd}, {order}, and {timestamp} placeholders.
+    /// A file path may contain {name}, {order}, and {timestamp} placeholders.
     /// {order} is the 1-based position of the command in the input.
     /// With --quiet, only failed commands produce output.
     /// When output goes to a file, the path is printed to stdout.
@@ -81,7 +81,7 @@ impl Task {
         }
     }
 
-    /// The text used for the label column and the {cmd} filename placeholder.
+    /// The text used for the label column and the {name} filename placeholder.
     fn label_source(&self) -> &str {
         self.name.as_deref().unwrap_or(&self.command)
     }
@@ -160,7 +160,7 @@ fn resolve_output_path(pattern: &str, label: &str, order: usize, order_width: us
     let safe_label = sanitize_for_filename(label);
     PathBuf::from(
         pattern
-            .replace("{cmd}", &safe_label)
+            .replace("{name}", &safe_label)
             .replace("{order}", &format!("{order:0>order_width$}")),
     )
 }
@@ -315,8 +315,8 @@ fn run_commands(
 /// if the line has no valid name prefix or an empty command.
 fn parse_named_line(line: &str) -> Result<(String, String)> {
     let colon = line
-        .find(':')
-        .ok_or_else(|| anyhow!("missing name prefix (expected `name: command`): {line}"))?;
+        .find(": ")
+        .ok_or_else(|| anyhow!("missing name prefix (expected `name: command` with a space after the colon): {line}"))?;
     let name = &line[..colon];
     if name.is_empty() {
         return Err(anyhow!("empty task name in line: {line}"));
@@ -622,6 +622,17 @@ mod tests {
         }
 
         #[test]
+        fn colon_without_space_errors() {
+            assert!(parse(&["build:make"]).is_err());
+        }
+
+        #[test]
+        fn extra_spaces_after_colon_trimmed() {
+            let tasks = parse(&["build:     make all"]).unwrap();
+            assert_eq!(tasks[0].command, "make all");
+        }
+
+        #[test]
         fn empty_name_errors() {
             assert!(parse(&[": echo hi"]).is_err());
         }
@@ -638,8 +649,11 @@ mod tests {
 
         #[test]
         fn empty_command_errors() {
+            // No space after the colon: rejected as a malformed prefix.
             assert!(parse(&["build:"]).is_err());
             assert!(parse(&["build:   "]).is_err());
+            // Space after the colon but nothing else: empty command.
+            assert!(parse_named_line("build: ").is_err());
         }
     }
 

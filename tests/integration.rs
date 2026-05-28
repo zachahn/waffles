@@ -416,9 +416,9 @@ fn output_file_written_for_quiet_failure() {
 }
 
 #[test]
-fn output_cmd_placeholder_expands() {
+fn output_name_placeholder_expands() {
     let dir = TempDir::new("waffle_output_cmd");
-    let pattern = dir.path().join("{cmd}.log");
+    let pattern = dir.path().join("{name}.log");
     let (out, _, code) = run_stdin("echo hi\n", &["-o", pattern.to_str().unwrap()]);
     assert_eq!(code, 0);
     assert!(out.contains("echo_hi.log"), "expected expanded filename: {out:?}");
@@ -498,7 +498,7 @@ fn output_order_zero_padded_with_ten_or_more_tasks() {
 #[test]
 fn output_cmd_sanitizes_special_chars() {
     let dir = TempDir::new("waffle_output_sanitize");
-    let pattern = dir.path().join("{cmd}.log");
+    let pattern = dir.path().join("{name}.log");
     let (out, _, code) = run_stdin("echo 'hello world'\n", &["-o", pattern.to_str().unwrap()]);
     assert_eq!(code, 0);
     assert!(out.contains("echo_hello_world_.log"), "expected sanitized filename: {out:?}");
@@ -540,7 +540,14 @@ fn named_uppercase_name_errors() {
 fn named_empty_command_errors() {
     let (_, stderr, code) = run_stdin("build:\n", &["--named"]);
     assert_ne!(code, 0);
-    assert!(stderr.contains("empty command"), "expected empty command error: {stderr:?}");
+    assert!(stderr.contains("missing name prefix"), "expected missing prefix error: {stderr:?}");
+}
+
+#[test]
+fn named_colon_without_space_errors() {
+    let (_, stderr, code) = run_stdin("build:make\n", &["--named"]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("missing name prefix"), "expected missing prefix error: {stderr:?}");
 }
 
 #[test]
@@ -551,9 +558,9 @@ fn named_duplicate_name_errors() {
 }
 
 #[test]
-fn named_cmd_placeholder_uses_name() {
+fn named_name_placeholder_uses_name() {
     let dir = TempDir::new("waffle_named_cmd");
-    let pattern = dir.path().join("{cmd}.log");
+    let pattern = dir.path().join("{name}.log");
     let (out, _, code) = run_stdin("mytask: echo hi\n", &["--named", "-o", pattern.to_str().unwrap()]);
     assert_eq!(code, 0);
     assert!(out.contains("mytask.log"), "expected name in filename: {out:?}");
@@ -572,7 +579,7 @@ fn without_named_flag_colon_lines_are_literal() {
 #[test]
 fn output_cmd_collapses_consecutive_underscores() {
     let dir = TempDir::new("waffle_output_collapse");
-    let pattern = dir.path().join("{cmd}.log");
+    let pattern = dir.path().join("{name}.log");
     let (out, _, code) = run_stdin("echo  hello   world\n", &["-o", pattern.to_str().unwrap()]);
     assert_eq!(code, 0);
     let log_name = out.lines().find(|l| l.ends_with(".log")).expect("expected log path line");
